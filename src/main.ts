@@ -1,0 +1,20 @@
+import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import { AppModule } from './app.module.js';
+import { configureApp } from './app.setup.js';
+import type { Env } from './config/env.js';
+
+async function bootstrap() {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  configureApp(app);
+  app.enableShutdownHooks();
+
+  const config = app.get<ConfigService<Env, true>>(ConfigService);
+  const port = config.get('PORT', { infer: true });
+  await app.listen(port, config.get('HOST', { infer: true }));
+  Logger.log(`API ready on http://localhost:${port}/api  (docs: http://localhost:${port}/docs)`, 'Bootstrap');
+}
+
+await bootstrap();

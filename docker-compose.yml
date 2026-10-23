@@ -1,0 +1,39 @@
+# Local development database only. Production uses Azure Database for PostgreSQL.
+# Start:  npm run db:up      (docker compose up -d)
+# Stop:   npm run db:down    (docker compose down; add -v to also delete the data volume)
+# Adminer (database browser): http://localhost:8081  server: postgres, user/pass/db: ecom
+name: ecom
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ecom
+      POSTGRES_PASSWORD: ecom
+      POSTGRES_DB: ecom
+    ports:
+      # 5433 on the host so it does not clash with other local Postgres instances
+      - '5433:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ecom -d ecom']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  adminer:
+    image: adminer:5
+    restart: unless-stopped
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      # 8081 on the host because 8080 is used by the CRM project's Adminer
+      - '8081:8080'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
