@@ -96,7 +96,8 @@ model User {
   @@map("users")
 }
 
-// One row per logged-in device, at most MAX_LOGIN_DEVICES live at once. Only the refresh token's hash is stored.
+// One row per logged-in device, at most MAX_LOGIN_DEVICES live at once (a further login logs out the oldest).
+// Only the refresh token's hash is stored.
 model Session {
   id               String    @id @default(uuid(7)) @db.Uuid
   userId           String    @map("user_id") @db.Uuid

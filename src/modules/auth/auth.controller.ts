@@ -31,7 +31,10 @@ export class AuthController {
   @Throttle(AUTH_THROTTLE)
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Log in with email and password (refused when MAX_LOGIN_DEVICES are already logged in)' })
+  @ApiOperation({
+    summary:
+      'Log in with email and password (when MAX_LOGIN_DEVICES are already logged in, the oldest login is logged out)',
+  })
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const { tokens, authUser } = await this.auth.login(dto, clientMeta(req));
     return this.respondWithSession(res, tokens, authUser);

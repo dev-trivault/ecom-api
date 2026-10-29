@@ -65,12 +65,18 @@ export class AuthService {
     return this.prisma.$transaction(async (tx) => {
       // Locks the user row so two logins at the same moment cannot both take the last free device.
       await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id}::uuid FOR UPDATE`;
-      const devices = await tx.session.count({ where: { userId: user.id, ...liveSession() } });
-      if (devices >= maxDevices) {
-        const escape = this.mail.isConfigured ? ', or use "Forgot password?" to log out everywhere' : '';
-        throw new ForbiddenException(
-          `You are already logged in on ${maxDevices} devices. Log out on one of them first${escape}.`,
-        );
+      const devices = await tx.session.findMany({
+        where: { userId: user.id, ...liveSession() },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+      // When every place is taken, the device that logged in first is logged out to make room for this one.
+      const excess = devices.length - maxDevices + 1;
+      if (excess > 0) {
+        await tx.session.updateMany({
+          where: { id: { in: devices.slice(0, excess).map((s) => s.id) } },
+          data: { revokedAt: new Date() },
+        });
       }
       await tx.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
       return this.createSession(tx, user.id, meta);
