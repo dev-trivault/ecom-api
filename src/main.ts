@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -10,6 +11,12 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   configureApp(app);
   app.enableShutdownHooks();
+
+  // Vercel and Nginx reuse open connections. Node closes idle ones after 5 s, and a request sent on a connection
+  // Node is just closing comes back as "502 Bad Gateway", so keep them open longer than the proxy does.
+  const server = app.getHttpServer() as Server;
+  server.keepAliveTimeout = 75_000;
+  server.headersTimeout = 76_000;
 
   const config = app.get<ConfigService<Env, true>>(ConfigService);
   const port = config.get('PORT', { infer: true });
