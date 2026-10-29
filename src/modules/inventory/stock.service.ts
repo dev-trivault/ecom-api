@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import type { StockMovementType } from '../../generated/prisma/enums.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import type { Tx } from '../../prisma/prisma.service.js';
+import { BusinessService } from '../business/business.service.js';
 
 export interface StockChange {
   variantId: string;
@@ -13,7 +14,6 @@ export interface StockChange {
 }
 
 export interface StockContext {
-  organizationId: string;
   warehouseId: string;
   userId: string;
   purchaseId?: string;
@@ -36,14 +36,13 @@ export interface VariantInfo {
  */
 @Injectable()
 export class StockService {
+  constructor(private readonly business: BusinessService) {}
+
   async apply(tx: Tx, ctx: StockContext, changes: StockChange[]): Promise<void> {
     const effective = changes.filter((c) => c.quantity !== 0);
     if (effective.length === 0) return;
 
-    const { isNegativeStockAllowed } = await tx.organization.findUniqueOrThrow({
-      where: { id: ctx.organizationId },
-      select: { isNegativeStockAllowed: true },
-    });
+    const { isNegativeStockAllowed } = await this.business.get(tx);
     if (!isNegativeStockAllowed) await this.assertAvailable(tx, ctx, effective);
 
     // A fixed lock order (by variant id) prevents deadlocks between two entries that
@@ -54,7 +53,6 @@ export class StockService {
       const level = await tx.stockLevel.upsert({
         where: { variantId_warehouseId: { variantId: change.variantId, warehouseId: ctx.warehouseId } },
         create: {
-          organizationId: ctx.organizationId,
           variantId: change.variantId,
           warehouseId: ctx.warehouseId,
           quantity: change.quantity,
@@ -72,7 +70,6 @@ export class StockService {
 
       await tx.stockMovement.create({
         data: {
-          organizationId: ctx.organizationId,
           warehouseId: ctx.warehouseId,
           variantId: change.variantId,
           type: change.type,
@@ -90,18 +87,17 @@ export class StockService {
   }
 
   /**
-   * Loads the given variants, making sure they exist in this organization.
+   * Loads the given variants, making sure they all exist.
    * Inactive SKUs are rejected unless `allowInactive` (needed when reversing old entries).
    */
   async loadVariants(
     tx: Tx,
-    organizationId: string,
     variantIds: string[],
     { allowInactive = false } = {},
   ): Promise<Map<string, VariantInfo & { costPrice: Prisma.Decimal }>> {
     const unique = [...new Set(variantIds)];
     const variants = await tx.productVariant.findMany({
-      where: { id: { in: unique }, organizationId },
+      where: { id: { in: unique } },
       select: {
         id: true,
         sku: true,

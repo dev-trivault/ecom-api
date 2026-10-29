@@ -76,7 +76,8 @@ deploy() {
   (cd "$release" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
   ln -sfn "$ENV_FILE" "$release/.env"
 
-  previous=$(readlink -f "$CURRENT" 2>/dev/null || true)
+  # -e, not -f: on the first deploy -f still prints $CURRENT, and switching back to it links `current` to itself.
+  previous=$(readlink -e "$CURRENT" 2>/dev/null || true)
   switch_to "$release"
 
   if ! healthy; then

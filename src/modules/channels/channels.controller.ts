@@ -1,7 +1,5 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import type { AuthUser } from '../../common/auth/auth-user.js';
-import { CurrentUser, Roles } from '../../common/auth/decorators.js';
 import { CreateChannelDto, UpdateChannelDto } from './channels.dto.js';
 import { ChannelsService } from './channels.service.js';
 
@@ -12,19 +10,17 @@ export class ChannelsController {
   constructor(private readonly channels: ChannelsService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser) {
-    return this.channels.list(user.organizationId);
+  list() {
+    return this.channels.list();
   }
 
   @Post()
-  @Roles('OWNER', 'ADMIN')
-  create(@CurrentUser() user: AuthUser, @Body() dto: CreateChannelDto) {
-    return this.channels.create(user.organizationId, dto);
+  create(@Body() dto: CreateChannelDto) {
+    return this.channels.create(dto);
   }
 
   @Patch(':id')
-  @Roles('OWNER', 'ADMIN')
-  update(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateChannelDto) {
-    return this.channels.update(user.organizationId, id, dto);
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateChannelDto) {
+    return this.channels.update(id, dto);
   }
 }

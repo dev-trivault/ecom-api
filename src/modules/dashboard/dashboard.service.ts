@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { BusinessService } from '../business/business.service.js';
 import { addDays, toDbDate, todayIn } from '../../common/utils/dates.js';
 import { InventoryService } from '../inventory/inventory.service.js';
 
@@ -11,19 +12,17 @@ const CHANNEL_WINDOW_DAYS = 30;
 export class DashboardService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly business: BusinessService,
     private readonly inventory: InventoryService,
   ) {}
 
-  async summary(organizationId: string) {
-    const { timezone } = await this.prisma.organization.findUniqueOrThrow({
-      where: { id: organizationId },
-      select: { timezone: true },
-    });
+  async summary() {
+    const { timezone } = await this.business.get();
     const today = todayIn(timezone);
     const monthStart = `${today.slice(0, 8)}01`;
     const trendStart = addDays(today, -(TREND_DAYS - 1));
     const channelStart = addDays(today, -(CHANNEL_WINDOW_DAYS - 1));
-    const completed = { organizationId, status: 'COMPLETED' as const };
+    const completed = { status: 'COMPLETED' as const };
 
     const [
       stock,
@@ -37,7 +36,7 @@ export class DashboardService {
       reorder,
       recent,
     ] = await Promise.all([
-      this.stockTotals(organizationId),
+      this.stockTotals(),
       this.prisma.dispatch.aggregate({
         where: { ...completed, dispatchDate: toDbDate(today) },
         _count: true,
@@ -53,7 +52,7 @@ export class DashboardService {
         _count: true,
         _sum: { totalQuantity: true, totalAmount: true },
       }),
-      this.prisma.salesChannel.findMany({ where: { organizationId }, orderBy: { sortOrder: 'asc' } }),
+      this.prisma.salesChannel.findMany({ orderBy: { sortOrder: 'asc' } }),
       this.prisma.dispatch.groupBy({
         by: ['channelId'],
         where: { ...completed, dispatchDate: { gte: toDbDate(channelStart) } },
@@ -66,9 +65,9 @@ export class DashboardService {
         _count: true,
         _sum: { totalQuantity: true },
       }),
-      this.dailyTrend(organizationId, trendStart),
-      this.inventory.listStock(organizationId, { status: 'reorder', page: 1, pageSize: 8 }),
-      this.inventory.listMovements(organizationId, { page: 1, pageSize: 8 }),
+      this.dailyTrend(trendStart),
+      this.inventory.listStock({ status: 'reorder', page: 1, pageSize: 8 }),
+      this.inventory.listMovements({ page: 1, pageSize: 8 }),
     ]);
 
     const packed = new Map(packedByChannel.map((c) => [c.channelId, c]));
@@ -108,7 +107,7 @@ export class DashboardService {
     };
   }
 
-  private async stockTotals(organizationId: string) {
+  private async stockTotals() {
     const [row] = await this.prisma.$queryRaw<
       { skus: number; units: number; value: number; low: number; out: number }[]
     >(Prisma.sql`
@@ -123,23 +122,23 @@ export class DashboardService {
         FROM product_variants v
         JOIN products p ON p.id = v.product_id
         LEFT JOIN stock_levels sl ON sl.variant_id = v.id
-        WHERE v.organization_id = ${organizationId}::uuid AND v.is_active AND p.is_active
+        WHERE v.is_active AND p.is_active
         GROUP BY v.id
       ) s`);
     return row ?? { skus: 0, units: 0, value: 0, low: 0, out: 0 };
   }
 
   /** Units packed and returned per day, with zero-filled days so charts have no gaps. */
-  private async dailyTrend(organizationId: string, from: string) {
+  private async dailyTrend(from: string) {
     const [packed, returned] = await Promise.all([
       this.prisma.dispatch.groupBy({
         by: ['dispatchDate'],
-        where: { organizationId, status: 'COMPLETED', dispatchDate: { gte: toDbDate(from) } },
+        where: { status: 'COMPLETED', dispatchDate: { gte: toDbDate(from) } },
         _sum: { totalQuantity: true },
       }),
       this.prisma.salesReturn.groupBy({
         by: ['returnDate'],
-        where: { organizationId, status: 'COMPLETED', returnDate: { gte: toDbDate(from) } },
+        where: { status: 'COMPLETED', returnDate: { gte: toDbDate(from) } },
         _sum: { totalQuantity: true },
       }),
     ]);

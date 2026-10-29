@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { BusinessService } from '../business/business.service.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { pageArgs, paginated } from '../../common/dto/pagination.dto.js';
 import { timestampRange } from '../../common/utils/dates.js';
@@ -28,13 +29,14 @@ export interface StockRow {
 export class InventoryService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly business: BusinessService,
     private readonly stock: StockService,
     private readonly warehouses: WarehousesService,
   ) {}
 
   /** Current stock per SKU, summed across warehouses unless one is chosen. */
-  async listStock(organizationId: string, query: StockQueryDto) {
-    const base = this.stockQuery(organizationId, query);
+  async listStock(query: StockQueryDto) {
+    const base = this.stockQuery(query);
     const { skip, take } = pageArgs(query);
 
     // Reorder lists show the emptiest SKUs first; everything else is alphabetical.
@@ -56,9 +58,9 @@ export class InventoryService {
     return { ...paginated(rows, summary.count, query), totalUnits: summary.units, totalValue: summary.value };
   }
 
-  async exportStockCsv(organizationId: string, query: StockQueryDto): Promise<string> {
+  async exportStockCsv(query: StockQueryDto): Promise<string> {
     const rows = await this.prisma.$queryRaw<StockRow[]>(
-      Prisma.sql`${this.stockQuery(organizationId, query)} ORDER BY "productName" ASC, sku ASC`,
+      Prisma.sql`${this.stockQuery(query)} ORDER BY "productName" ASC, sku ASC`,
     );
     return toCsv(
       [
@@ -88,14 +90,10 @@ export class InventoryService {
     );
   }
 
-  async listMovements(organizationId: string, query: MovementQueryDto) {
-    const { timezone } = await this.prisma.organization.findUniqueOrThrow({
-      where: { id: organizationId },
-      select: { timezone: true },
-    });
+  async listMovements(query: MovementQueryDto) {
+    const { timezone } = await this.business.get();
     const search = query.search?.trim();
     const where: Prisma.StockMovementWhereInput = {
-      organizationId,
       variantId: query.variantId,
       type: query.type,
       warehouseId: query.warehouseId,
@@ -132,8 +130,8 @@ export class InventoryService {
 
   async adjust(user: AuthUser, dto: StockAdjustmentDto) {
     return this.prisma.$transaction(async (tx) => {
-      await this.stock.loadVariants(tx, user.organizationId, [dto.variantId]);
-      const warehouseId = await this.warehouses.resolve(tx, user.organizationId, dto.warehouseId);
+      await this.stock.loadVariants(tx, [dto.variantId]);
+      const warehouseId = await this.warehouses.resolve(tx, dto.warehouseId);
 
       let change = dto.quantity;
       if (dto.mode === 'SET') {
@@ -145,7 +143,7 @@ export class InventoryService {
       }
       if (change === 0) throw new BadRequestException('Stock is already at this quantity, nothing to adjust');
 
-      await this.stock.apply(tx, { organizationId: user.organizationId, warehouseId, userId: user.userId }, [
+      await this.stock.apply(tx, { warehouseId, userId: user.userId }, [
         { variantId: dto.variantId, quantity: change, type: 'ADJUSTMENT', note: dto.reason.trim() },
       ]);
       const level = await tx.stockLevel.findUniqueOrThrow({
@@ -155,7 +153,7 @@ export class InventoryService {
     });
   }
 
-  private stockQuery(organizationId: string, query: StockQueryDto): Prisma.Sql {
+  private stockQuery(query: StockQueryDto): Prisma.Sql {
     const search = query.search?.trim();
     const like = search ? `%${search}%` : null;
     const warehouseJoin = query.warehouseId
@@ -185,8 +183,7 @@ export class InventoryService {
       FROM product_variants v
       JOIN products p ON p.id = v.product_id
       LEFT JOIN stock_levels sl ON sl.variant_id = v.id ${warehouseJoin}
-      WHERE v.organization_id = ${organizationId}::uuid
-        AND v.is_active = true
+      WHERE v.is_active = true
         AND p.is_active = true
         ${like ? Prisma.sql`AND (v.sku ILIKE ${like} OR p.name ILIKE ${like} OR v.barcode ILIKE ${like})` : Prisma.empty}
         ${query.category ? Prisma.sql`AND p.category = ${query.category}` : Prisma.empty}

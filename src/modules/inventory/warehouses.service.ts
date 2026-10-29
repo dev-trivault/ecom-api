@@ -7,21 +7,20 @@ import { CreateWarehouseDto, UpdateWarehouseDto } from './dto/warehouse.dto.js';
 export class WarehousesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(organizationId: string) {
+  list() {
     return this.prisma.warehouse.findMany({
-      where: { organizationId },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
     });
   }
 
-  create(organizationId: string, dto: CreateWarehouseDto) {
+  create(dto: CreateWarehouseDto) {
     return this.prisma.warehouse.create({
-      data: { organizationId, name: dto.name.trim(), address: clean(dto.address) },
+      data: { name: dto.name.trim(), address: clean(dto.address) },
     });
   }
 
-  async update(organizationId: string, id: string, dto: UpdateWarehouseDto) {
-    const warehouse = await this.prisma.warehouse.findFirst({ where: { id, organizationId } });
+  async update(id: string, dto: UpdateWarehouseDto) {
+    const warehouse = await this.prisma.warehouse.findUnique({ where: { id } });
     if (!warehouse) throw new NotFoundException('Warehouse not found');
     if (dto.isActive === false && warehouse.isDefault) {
       throw new BadRequestException('The default warehouse cannot be deactivated');
@@ -37,9 +36,9 @@ export class WarehousesService {
   }
 
   /** The warehouse to use for an entry: the one asked for, or the business's default. */
-  async resolve(db: Tx | PrismaService, organizationId: string, warehouseId?: string): Promise<string> {
+  async resolve(db: Tx | PrismaService, warehouseId?: string): Promise<string> {
     const warehouse = await db.warehouse.findFirst({
-      where: warehouseId ? { id: warehouseId, organizationId, isActive: true } : { organizationId, isActive: true },
+      where: warehouseId ? { id: warehouseId, isActive: true } : { isActive: true },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
       select: { id: true },
     });

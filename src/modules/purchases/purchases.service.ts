@@ -21,10 +21,9 @@ export class PurchasesService {
     private readonly warehouses: WarehousesService,
   ) {}
 
-  async list(organizationId: string, query: PurchaseQueryDto) {
+  async list(query: PurchaseQueryDto) {
     const search = query.search?.trim();
     const where: Prisma.PurchaseWhereInput = {
-      organizationId,
       status: query.status,
       supplierId: query.supplierId,
       purchaseDate: dateRange(query.from, query.to),
@@ -55,9 +54,9 @@ export class PurchasesService {
     return paginated(items, total, query);
   }
 
-  async get(organizationId: string, id: string) {
-    const purchase = await this.prisma.purchase.findFirst({
-      where: { id, organizationId },
+  async get(id: string) {
+    const purchase = await this.prisma.purchase.findUnique({
+      where: { id },
       include: {
         supplier: { select: { id: true, name: true, phone: true } },
         warehouse: { select: { id: true, name: true } },
@@ -79,20 +78,17 @@ export class PurchasesService {
   }
 
   async create(user: AuthUser, dto: CreatePurchaseDto) {
-    const organizationId = user.organizationId;
-
     const id = await this.prisma.$transaction(async (tx) => {
       await this.stock.loadVariants(
         tx,
-        organizationId,
         dto.items.map((i) => i.variantId),
       );
       if (dto.supplierId) {
-        const supplier = await tx.supplier.findFirst({ where: { id: dto.supplierId, organizationId } });
+        const supplier = await tx.supplier.findUnique({ where: { id: dto.supplierId } });
         if (!supplier) throw new NotFoundException('Supplier not found');
       }
-      const warehouseId = await this.warehouses.resolve(tx, organizationId, dto.warehouseId);
-      const number = await this.numbers.next(tx, organizationId, 'PURCHASE');
+      const warehouseId = await this.warehouses.resolve(tx, dto.warehouseId);
+      const number = await this.numbers.next(tx, 'PURCHASE');
 
       const lines = dto.items.map((i) => {
         const unitCost = new Prisma.Decimal(i.unitCost);
@@ -101,7 +97,6 @@ export class PurchasesService {
 
       const purchase = await tx.purchase.create({
         data: {
-          organizationId,
           number,
           supplierId: dto.supplierId,
           warehouseId,
@@ -117,7 +112,7 @@ export class PurchasesService {
 
       await this.stock.apply(
         tx,
-        { organizationId, warehouseId, userId: user.userId, purchaseId: purchase.id },
+        { warehouseId, userId: user.userId, purchaseId: purchase.id },
         lines.map((l) => ({
           variantId: l.variantId,
           quantity: l.quantity,
@@ -136,14 +131,14 @@ export class PurchasesService {
       return purchase.id;
     }, TX_OPTIONS);
 
-    return this.get(organizationId, id);
+    return this.get(id);
   }
 
   /** Cancelling takes the purchased units back out of stock. The entry stays for the record. */
   async cancel(user: AuthUser, id: string, reason: string) {
     await this.prisma.$transaction(async (tx) => {
-      const purchase = await tx.purchase.findFirst({
-        where: { id, organizationId: user.organizationId },
+      const purchase = await tx.purchase.findUnique({
+        where: { id },
         include: { items: true },
       });
       if (!purchase) throw new NotFoundException('Purchase not found');
@@ -158,7 +153,7 @@ export class PurchasesService {
 
       await this.stock.apply(
         tx,
-        { organizationId: user.organizationId, warehouseId: purchase.warehouseId, userId: user.userId, purchaseId: id },
+        { warehouseId: purchase.warehouseId, userId: user.userId, purchaseId: id },
         purchase.items.map((i) => ({
           variantId: i.variantId,
           quantity: -i.quantity,
@@ -168,20 +163,16 @@ export class PurchasesService {
         })),
       );
 
-      await this.restorePreviousCostPrices(tx, user.organizationId, purchase.items);
+      await this.restorePreviousCostPrices(tx, purchase.items);
     }, TX_OPTIONS);
-    return this.get(user.organizationId, id);
+    return this.get(id);
   }
 
   /**
    * If a SKU's cost price came from the cancelled purchase, fall back to the price of its
    * latest remaining purchase. Cost prices that were edited by hand since are left alone.
    */
-  private async restorePreviousCostPrices(
-    tx: Tx,
-    organizationId: string,
-    items: { variantId: string; unitCost: Prisma.Decimal }[],
-  ) {
+  private async restorePreviousCostPrices(tx: Tx, items: { variantId: string; unitCost: Prisma.Decimal }[]) {
     for (const item of items) {
       const variant = await tx.productVariant.findUnique({
         where: { id: item.variantId },
@@ -189,7 +180,7 @@ export class PurchasesService {
       });
       if (!variant?.costPrice.equals(item.unitCost)) continue;
       const previous = await tx.purchaseItem.findFirst({
-        where: { variantId: item.variantId, unitCost: { gt: 0 }, purchase: { organizationId, status: 'COMPLETED' } },
+        where: { variantId: item.variantId, unitCost: { gt: 0 }, purchase: { status: 'COMPLETED' } },
         orderBy: [{ purchase: { purchaseDate: 'desc' } }, { purchase: { createdAt: 'desc' } }],
         select: { unitCost: true },
       });

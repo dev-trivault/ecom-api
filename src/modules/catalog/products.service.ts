@@ -35,10 +35,9 @@ export class ProductsService {
     private readonly warehouses: WarehousesService,
   ) {}
 
-  async list(organizationId: string, query: ProductQueryDto) {
+  async list(query: ProductQueryDto) {
     const search = query.search?.trim();
     const where: Prisma.ProductWhereInput = {
-      organizationId,
       ...(query.status === 'all' ? {} : { isActive: query.status === 'active' }),
       ...(query.category ? { category: query.category } : {}),
       ...(search
@@ -68,9 +67,9 @@ export class ProductsService {
     return paginated(items, total, query);
   }
 
-  async get(organizationId: string, id: string) {
-    const product = await this.prisma.product.findFirst({
-      where: { id, organizationId },
+  async get(id: string) {
+    const product = await this.prisma.product.findUnique({
+      where: { id },
       include: { variants: { orderBy: { sku: 'asc' }, ...variantWithStock } },
     });
     if (!product) throw new NotFoundException('Product not found');
@@ -78,9 +77,9 @@ export class ProductsService {
     return { ...product, variants, totalStock: variants.filter((v) => v.isActive).reduce((s, v) => s + v.stock, 0) };
   }
 
-  async categories(organizationId: string): Promise<string[]> {
+  async categories(): Promise<string[]> {
     const rows = await this.prisma.product.findMany({
-      where: { organizationId, category: { not: null } },
+      where: { category: { not: null } },
       distinct: ['category'],
       select: { category: true },
       orderBy: { category: 'asc' },
@@ -93,13 +92,12 @@ export class ProductsService {
     const duplicates = skus.filter((s, i) => skus.indexOf(s) !== i);
     if (duplicates.length)
       throw new BadRequestException(`Duplicate SKU in the form: ${[...new Set(duplicates)].join(', ')}`);
-    await this.assertSkusFree(user.organizationId, skus);
+    await this.assertSkusFree(skus);
 
     const productId = await this.prisma.$transaction(
       async (tx) => {
         const product = await tx.product.create({
           data: {
-            organizationId: user.organizationId,
             name: dto.name,
             description: clean(dto.description),
             category: clean(dto.category),
@@ -114,11 +112,11 @@ export class ProductsService {
       },
       { timeout: 30_000 },
     );
-    return this.get(user.organizationId, productId);
+    return this.get(productId);
   }
 
-  async update(organizationId: string, id: string, dto: UpdateProductDto) {
-    await this.get(organizationId, id);
+  async update(id: string, dto: UpdateProductDto) {
+    await this.get(id);
     await this.prisma.product.update({
       where: { id },
       data: {
@@ -132,21 +130,21 @@ export class ProductsService {
         isActive: dto.isActive,
       },
     });
-    return this.get(organizationId, id);
+    return this.get(id);
   }
 
   async addVariant(user: AuthUser, productId: string, dto: CreateVariantDto) {
-    await this.get(user.organizationId, productId);
-    await this.assertSkusFree(user.organizationId, [normalizeSku(dto.sku)]);
+    await this.get(productId);
+    await this.assertSkusFree([normalizeSku(dto.sku)]);
     await this.prisma.$transaction((tx) => this.createVariants(tx, user, productId, [dto]));
-    return this.get(user.organizationId, productId);
+    return this.get(productId);
   }
 
-  async updateVariant(organizationId: string, variantId: string, dto: UpdateVariantDto) {
-    const variant = await this.prisma.productVariant.findFirst({ where: { id: variantId, organizationId } });
+  async updateVariant(variantId: string, dto: UpdateVariantDto) {
+    const variant = await this.prisma.productVariant.findUnique({ where: { id: variantId } });
     if (!variant) throw new NotFoundException('SKU not found');
     const sku = dto.sku === undefined ? undefined : normalizeSku(dto.sku);
-    if (sku && sku !== variant.sku) await this.assertSkusFree(organizationId, [sku]);
+    if (sku && sku !== variant.sku) await this.assertSkusFree([sku]);
 
     await this.prisma.productVariant.update({
       where: { id: variantId },
@@ -162,15 +160,14 @@ export class ProductsService {
         isActive: dto.isActive,
       },
     });
-    return this.get(organizationId, variant.productId);
+    return this.get(variant.productId);
   }
 
   /** Type-ahead search used by the "add item" box on purchase, packing and return forms. */
-  async searchVariants(organizationId: string, q: string | undefined, limit: number) {
+  async searchVariants(q: string | undefined, limit: number) {
     const search = q?.trim();
     const variants = await this.prisma.productVariant.findMany({
       where: {
-        organizationId,
         isActive: true,
         product: { isActive: true },
         ...(search
@@ -196,10 +193,10 @@ export class ProductsService {
   }
 
   /** Exact SKU or barcode match, for barcode scanners. */
-  async lookupVariant(organizationId: string, code: string) {
+  async lookupVariant(code: string) {
     const trimmed = code.trim();
     const variant = await this.prisma.productVariant.findFirst({
-      where: { organizationId, OR: [{ sku: normalizeSku(trimmed) }, { barcode: trimmed }] },
+      where: { OR: [{ sku: normalizeSku(trimmed) }, { barcode: trimmed }] },
       include: { product: { select: { id: true, name: true, isActive: true } }, ...variantWithStock.include },
     });
     if (!variant) throw new NotFoundException(`No SKU or barcode matches "${trimmed}"`);
@@ -207,15 +204,15 @@ export class ProductsService {
   }
 
   private async createVariants(tx: Tx, user: AuthUser, productId: string, variants: CreateVariantDto[]) {
-    const warehouseId = await this.warehouses.resolve(tx, user.organizationId);
+    const warehouseId = await this.warehouses.resolve(tx);
     const opening: { variantId: string; quantity: number; unitCost: number }[] = [];
 
     for (const input of variants) {
       const variant = await tx.productVariant.create({
-        data: { organizationId: user.organizationId, productId, ...this.variantData(input) },
+        data: { productId, ...this.variantData(input) },
       });
       await tx.stockLevel.create({
-        data: { organizationId: user.organizationId, variantId: variant.id, warehouseId, quantity: 0 },
+        data: { variantId: variant.id, warehouseId, quantity: 0 },
       });
       if (input.openingStock) {
         opening.push({ variantId: variant.id, quantity: input.openingStock, unitCost: input.costPrice ?? 0 });
@@ -224,7 +221,7 @@ export class ProductsService {
 
     await this.stock.apply(
       tx,
-      { organizationId: user.organizationId, warehouseId, userId: user.userId },
+      { warehouseId, userId: user.userId },
       opening.map((o) => ({ ...o, type: 'OPENING' as const, note: 'Opening stock' })),
     );
   }
@@ -242,9 +239,9 @@ export class ProductsService {
     };
   }
 
-  private async assertSkusFree(organizationId: string, skus: string[]) {
+  private async assertSkusFree(skus: string[]) {
     const taken = await this.prisma.productVariant.findMany({
-      where: { organizationId, sku: { in: skus } },
+      where: { sku: { in: skus } },
       select: { sku: true },
     });
     if (taken.length) {

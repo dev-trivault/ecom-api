@@ -1,6 +1,7 @@
 /**
- * Creates the first business + owner login, and (in development) some demo products.
- * Safe to run more than once: it does nothing if the owner email already exists.
+ * Sets up the business and its one login, plus (in development) some demo products.
+ * There is no sign-up in the app: this is the only way the login is created.
+ * Safe to run more than once: it does nothing once the business exists.
  *
  *   npm run db:seed
  *
@@ -11,7 +12,13 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '../src/generated/prisma/client.js';
-import { setupNewOrganization } from '../src/modules/organization/organization-setup.js';
+
+const DEFAULT_CHANNELS = [
+  { code: 'MEESHO', name: 'Meesho', color: '#9B1FE8' },
+  { code: 'FLIPKART', name: 'Flipkart', color: '#2874F0' },
+  { code: 'AMAZON', name: 'Amazon', color: '#FF9900' },
+  { code: 'MYNTRA', name: 'Myntra', color: '#FF3F6C' },
+];
 
 const isProduction = process.env.NODE_ENV === 'production';
 const email = (process.env.SEED_OWNER_EMAIL ?? (isProduction ? '' : 'owner@ecom.local')).trim().toLowerCase();
@@ -23,41 +30,31 @@ const withDemo = (process.env.SEED_DEMO ?? (isProduction ? 'false' : 'true')) ==
 const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 
 async function main() {
+  const existing = await prisma.business.findFirst({ select: { name: true } });
+  if (existing) {
+    console.log(`The business "${existing.name}" is already set up, nothing to do.`);
+    return;
+  }
   if (!email || password.length < 8) {
     throw new Error('Set SEED_OWNER_EMAIL and SEED_OWNER_PASSWORD (min 8 characters) to seed production.');
   }
-  if (await prisma.user.findUnique({ where: { email } })) {
-    console.log(`Owner ${email} already exists, nothing to do.`);
-    return;
-  }
 
   await prisma.$transaction(async (tx) => {
-    const org = await tx.organization.create({
-      data: {
-        name: businessName,
-        slug: `${businessName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36)}`,
-      },
-    });
-    await tx.user.create({
-      data: {
-        email,
-        name: ownerName,
-        passwordHash: await bcrypt.hash(password, 12),
-        memberships: { create: { organizationId: org.id, role: 'OWNER' } },
-      },
-    });
-    await setupNewOrganization(tx, org.id);
-    if (withDemo) await seedDemoCatalog(tx, org.id);
+    await tx.business.create({ data: { name: businessName } });
+    await tx.user.create({ data: { email, name: ownerName, passwordHash: await bcrypt.hash(password, 12) } });
+    await tx.warehouse.create({ data: { name: 'Main Warehouse', isDefault: true } });
+    await tx.salesChannel.createMany({ data: DEFAULT_CHANNELS.map((c, i) => ({ ...c, sortOrder: i })) });
+    if (withDemo) await seedDemoCatalog(tx);
   });
 
-  console.log(`Created business "${businessName}" with owner ${email}${withDemo ? ' and demo products' : ''}.`);
+  console.log(`Created business "${businessName}" with the login ${email}${withDemo ? ' and demo products' : ''}.`);
   if (!isProduction) console.log(`Log in with ${email} / ${password}`);
 }
 
 type Tx = Parameters<Parameters<PrismaClient['$transaction']>[0]>[0];
 
-async function seedDemoCatalog(tx: Tx, organizationId: string) {
-  const warehouse = await tx.warehouse.findFirstOrThrow({ where: { organizationId, isDefault: true } });
+async function seedDemoCatalog(tx: Tx) {
+  const warehouse = await tx.warehouse.findFirstOrThrow({ where: { isDefault: true } });
   const catalog = [
     {
       name: 'Cotton Printed Kurta',
@@ -79,13 +76,12 @@ async function seedDemoCatalog(tx: Tx, organizationId: string) {
   ];
 
   for (const [index, item] of catalog.entries()) {
-    const product = await tx.product.create({ data: { organizationId, name: item.name, category: item.category } });
+    const product = await tx.product.create({ data: { name: item.name, category: item.category } });
     for (const size of item.sizes) {
       const sku = ['DEMO', index + 1, item.color, size].filter(Boolean).join('-').toUpperCase();
       const opening = 8 + Math.floor(Math.random() * 20);
       const variant = await tx.productVariant.create({
         data: {
-          organizationId,
           productId: product.id,
           sku,
           size,
@@ -96,11 +92,10 @@ async function seedDemoCatalog(tx: Tx, organizationId: string) {
         },
       });
       await tx.stockLevel.create({
-        data: { organizationId, variantId: variant.id, warehouseId: warehouse.id, quantity: opening },
+        data: { variantId: variant.id, warehouseId: warehouse.id, quantity: opening },
       });
       await tx.stockMovement.create({
         data: {
-          organizationId,
           variantId: variant.id,
           warehouseId: warehouse.id,
           type: 'OPENING',

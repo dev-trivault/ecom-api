@@ -5,18 +5,17 @@ import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { validateEnv, type Env } from './config/env.js';
 import { JwtAuthGuard } from './common/auth/jwt-auth.guard.js';
-import { RolesGuard } from './common/auth/roles.guard.js';
 import { RequestActorInterceptor } from './common/auth/request-actor.interceptor.js';
 import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter.js';
 import { PrismaModule } from './prisma/prisma.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { BusinessModule } from './modules/business/business.module.js';
 import { CatalogModule } from './modules/catalog/catalog.module.js';
 import { ChannelsModule } from './modules/channels/channels.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { DispatchesModule } from './modules/dispatches/dispatches.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { InventoryModule } from './modules/inventory/inventory.module.js';
-import { OrganizationModule } from './modules/organization/organization.module.js';
 import { PurchasesModule } from './modules/purchases/purchases.module.js';
 import { ReturnsModule } from './modules/returns/returns.module.js';
 import { SuppliersModule } from './modules/suppliers/suppliers.module.js';
@@ -36,7 +35,7 @@ import { SuppliersModule } from './modules/suppliers/suppliers.module.js';
     PrismaModule,
     HealthModule,
     AuthModule,
-    OrganizationModule,
+    BusinessModule,
     InventoryModule,
     CatalogModule,
     SuppliersModule,
@@ -47,10 +46,9 @@ import { SuppliersModule } from './modules/suppliers/suppliers.module.js';
     DashboardModule,
   ],
   providers: [
-    // Order matters: rate limit, then authenticate, then check role.
+    // Order matters: rate limit, then authenticate.
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
-    { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_INTERCEPTOR, useClass: RequestActorInterceptor },
     { provide: APP_FILTER, useClass: PrismaExceptionFilter },
   ],

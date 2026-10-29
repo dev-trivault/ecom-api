@@ -41,5 +41,5 @@ function uniqueFields(exception: Prisma.PrismaClientKnownRequestError): string[]
   const target = meta?.target ?? meta?.driverAdapterError?.cause?.constraint?.fields;
   const fields: string[] = Array.isArray(target) ? target : typeof target === 'string' ? [target] : [];
   // Depending on the driver, these are Prisma field names or snake_case column names.
-  return fields.filter((f) => f !== 'organizationId' && f !== 'organization_id').map((f) => f.replaceAll('_', ' '));
+  return fields.map((f) => f.replaceAll('_', ' '));
 }

@@ -29,10 +29,9 @@ export class ReturnsService {
     private readonly warehouses: WarehousesService,
   ) {}
 
-  async list(organizationId: string, query: ReturnQueryDto) {
+  async list(query: ReturnQueryDto) {
     const search = query.search?.trim();
     const where: Prisma.SalesReturnWhereInput = {
-      organizationId,
       status: query.status,
       channelId: query.channelId,
       type: query.type,
@@ -65,9 +64,9 @@ export class ReturnsService {
     return paginated(items, total, query);
   }
 
-  async get(organizationId: string, id: string) {
-    const salesReturn = await this.prisma.salesReturn.findFirst({
-      where: { id, organizationId },
+  async get(id: string) {
+    const salesReturn = await this.prisma.salesReturn.findUnique({
+      where: { id },
       include: {
         channel: { select: { id: true, name: true, code: true, color: true } },
         warehouse: { select: { id: true, name: true } },
@@ -87,31 +86,28 @@ export class ReturnsService {
   }
 
   async create(user: AuthUser, dto: CreateReturnDto) {
-    const organizationId = user.organizationId;
     const orderNumber = clean(dto.orderNumber);
 
     const id = await this.prisma.$transaction(async (tx) => {
-      const channel = await tx.salesChannel.findFirst({ where: { id: dto.channelId, organizationId } });
+      const channel = await tx.salesChannel.findUnique({ where: { id: dto.channelId } });
       if (!channel) throw new NotFoundException('Sales channel not found');
 
       // Returned products may have been deactivated since they were sold, so allow inactive SKUs.
       await this.stock.loadVariants(
         tx,
-        organizationId,
         dto.items.map((i) => i.variantId),
         { allowInactive: true },
       );
 
-      const dispatch = await this.findOriginalDispatch(tx, organizationId, dto, orderNumber);
+      const dispatch = await this.findOriginalDispatch(tx, dto, orderNumber);
       if (dispatch) await this.assertNotOverReturned(tx, dispatch.id, dto.items);
 
-      const warehouseId = await this.warehouses.resolve(tx, organizationId, dto.warehouseId ?? dispatch?.warehouseId);
-      const number = await this.numbers.next(tx, organizationId, 'RETURN');
+      const warehouseId = await this.warehouses.resolve(tx, dto.warehouseId ?? dispatch?.warehouseId);
+      const number = await this.numbers.next(tx, 'RETURN');
       const good = dto.items.filter((i) => i.condition === 'GOOD');
 
       const salesReturn = await tx.salesReturn.create({
         data: {
-          organizationId,
           number,
           channelId: dto.channelId,
           warehouseId,
@@ -134,20 +130,20 @@ export class ReturnsService {
 
       await this.stock.apply(
         tx,
-        { organizationId, warehouseId, userId: user.userId, salesReturnId: salesReturn.id },
+        { warehouseId, userId: user.userId, salesReturnId: salesReturn.id },
         good.map((i) => ({ variantId: i.variantId, quantity: i.quantity, type: 'RETURN' as const })),
       );
       return salesReturn.id;
     }, TX_OPTIONS);
 
-    return this.get(organizationId, id);
+    return this.get(id);
   }
 
   /** Cancelling takes the restocked (GOOD) units back out of stock. */
   async cancel(user: AuthUser, id: string, reason: string) {
     await this.prisma.$transaction(async (tx) => {
-      const salesReturn = await tx.salesReturn.findFirst({
-        where: { id, organizationId: user.organizationId },
+      const salesReturn = await tx.salesReturn.findUnique({
+        where: { id },
         include: { items: true },
       });
       if (!salesReturn) throw new NotFoundException('Return not found');
@@ -162,7 +158,6 @@ export class ReturnsService {
       await this.stock.apply(
         tx,
         {
-          organizationId: user.organizationId,
           warehouseId: salesReturn.warehouseId,
           userId: user.userId,
           salesReturnId: id,
@@ -177,12 +172,12 @@ export class ReturnsService {
           })),
       );
     }, TX_OPTIONS);
-    return this.get(user.organizationId, id);
+    return this.get(id);
   }
 
-  private async findOriginalDispatch(tx: Tx, organizationId: string, dto: CreateReturnDto, orderNumber: string | null) {
+  private async findOriginalDispatch(tx: Tx, dto: CreateReturnDto, orderNumber: string | null) {
     if (dto.dispatchId) {
-      const dispatch = await tx.dispatch.findFirst({ where: { id: dto.dispatchId, organizationId } });
+      const dispatch = await tx.dispatch.findUnique({ where: { id: dto.dispatchId } });
       if (!dispatch) throw new NotFoundException('Original packing entry not found');
       if (dispatch.status === 'CANCELLED')
         throw new BadRequestException(`Packing entry ${dispatch.number} is cancelled`);
@@ -194,7 +189,6 @@ export class ReturnsService {
     if (!orderNumber) return null;
     return tx.dispatch.findFirst({
       where: {
-        organizationId,
         channelId: dto.channelId,
         status: 'COMPLETED',
         orderNumber: { equals: orderNumber, mode: 'insensitive' },

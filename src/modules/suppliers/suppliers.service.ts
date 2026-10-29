@@ -9,10 +9,9 @@ import { CreateSupplierDto, SupplierQueryDto, UpdateSupplierDto } from './suppli
 export class SuppliersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(organizationId: string, query: SupplierQueryDto) {
+  async list(query: SupplierQueryDto) {
     const search = query.search?.trim();
     const where: Prisma.SupplierWhereInput = {
-      organizationId,
       ...(query.status === 'all' ? {} : { isActive: query.status === 'active' }),
       ...(search
         ? {
@@ -36,11 +35,11 @@ export class SuppliersService {
     return paginated(items, total, query);
   }
 
-  async get(organizationId: string, id: string) {
-    const supplier = await this.prisma.supplier.findFirst({ where: { id, organizationId } });
+  async get(id: string) {
+    const supplier = await this.prisma.supplier.findUnique({ where: { id } });
     if (!supplier) throw new NotFoundException('Supplier not found');
     const totals = await this.prisma.purchase.aggregate({
-      where: { supplierId: id, organizationId, status: 'COMPLETED' },
+      where: { supplierId: id, status: 'COMPLETED' },
       _sum: { totalAmount: true, totalQuantity: true },
       _count: true,
     });
@@ -52,16 +51,16 @@ export class SuppliersService {
     };
   }
 
-  async create(organizationId: string, dto: CreateSupplierDto) {
-    await this.assertNameFree(organizationId, dto.name);
-    return this.prisma.supplier.create({ data: { organizationId, ...this.data(dto), name: dto.name } });
+  async create(dto: CreateSupplierDto) {
+    await this.assertNameFree(dto.name);
+    return this.prisma.supplier.create({ data: { ...this.data(dto), name: dto.name } });
   }
 
-  async update(organizationId: string, id: string, dto: UpdateSupplierDto) {
-    const supplier = await this.prisma.supplier.findFirst({ where: { id, organizationId } });
+  async update(id: string, dto: UpdateSupplierDto) {
+    const supplier = await this.prisma.supplier.findUnique({ where: { id } });
     if (!supplier) throw new NotFoundException('Supplier not found');
     if (dto.name && dto.name.toLowerCase() !== supplier.name.toLowerCase()) {
-      await this.assertNameFree(organizationId, dto.name);
+      await this.assertNameFree(dto.name);
     }
     return this.prisma.supplier.update({
       where: { id },
@@ -81,9 +80,9 @@ export class SuppliersService {
     };
   }
 
-  private async assertNameFree(organizationId: string, name: string) {
+  private async assertNameFree(name: string) {
     const existing = await this.prisma.supplier.findFirst({
-      where: { organizationId, name: { equals: name.trim(), mode: 'insensitive' } },
+      where: { name: { equals: name.trim(), mode: 'insensitive' } },
     });
     if (existing) throw new ConflictException(`A supplier named "${existing.name}" already exists`);
   }

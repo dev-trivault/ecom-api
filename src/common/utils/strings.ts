@@ -23,13 +23,14 @@ export function patchText(
   return cleaned === null ? null : transform(cleaned);
 }
 
-export function slugify(value: string): string {
+/** For user-provided text placed inside an HTML email. */
+export function escapeHtml(value: string): string {
   return value
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 /** Minimal RFC 4180 CSV writer. */

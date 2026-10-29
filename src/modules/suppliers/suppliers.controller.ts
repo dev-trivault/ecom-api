@@ -1,7 +1,5 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import type { AuthUser } from '../../common/auth/auth-user.js';
-import { CurrentUser, Roles } from '../../common/auth/decorators.js';
 import { CreateSupplierDto, SupplierQueryDto, UpdateSupplierDto } from './suppliers.dto.js';
 import { SuppliersService } from './suppliers.service.js';
 
@@ -12,23 +10,22 @@ export class SuppliersController {
   constructor(private readonly suppliers: SuppliersService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query() query: SupplierQueryDto) {
-    return this.suppliers.list(user.organizationId, query);
+  list(@Query() query: SupplierQueryDto) {
+    return this.suppliers.list(query);
   }
 
   @Get(':id')
-  get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
-    return this.suppliers.get(user.organizationId, id);
+  get(@Param('id', ParseUUIDPipe) id: string) {
+    return this.suppliers.get(id);
   }
 
   @Post()
-  create(@CurrentUser() user: AuthUser, @Body() dto: CreateSupplierDto) {
-    return this.suppliers.create(user.organizationId, dto);
+  create(@Body() dto: CreateSupplierDto) {
+    return this.suppliers.create(dto);
   }
 
   @Patch(':id')
-  @Roles('OWNER', 'ADMIN', 'MANAGER')
-  update(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSupplierDto) {
-    return this.suppliers.update(user.organizationId, id, dto);
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateSupplierDto) {
+    return this.suppliers.update(id, dto);
   }
 }

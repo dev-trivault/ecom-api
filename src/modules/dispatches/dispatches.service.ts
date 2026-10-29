@@ -42,10 +42,9 @@ export class DispatchesService {
     private readonly warehouses: WarehousesService,
   ) {}
 
-  async list(organizationId: string, query: DispatchQueryDto) {
+  async list(query: DispatchQueryDto) {
     const search = query.search?.trim();
     const where: Prisma.DispatchWhereInput = {
-      organizationId,
       status: query.status,
       channelId: query.channelId,
       dispatchDate: dateRange(query.from, query.to),
@@ -76,9 +75,9 @@ export class DispatchesService {
     return paginated(items, total, query);
   }
 
-  async get(organizationId: string, id: string) {
-    const dispatch = await this.prisma.dispatch.findFirst({
-      where: { id, organizationId },
+  async get(id: string) {
+    const dispatch = await this.prisma.dispatch.findUnique({
+      where: { id },
       include: {
         channel: { select: { id: true, name: true, code: true, color: true } },
         warehouse: { select: { id: true, name: true } },
@@ -95,10 +94,9 @@ export class DispatchesService {
   }
 
   /** Finds packed orders by order ID or tracking number. Used to pre-fill return entries. */
-  async lookup(organizationId: string, query: DispatchLookupDto) {
+  async lookup(query: DispatchLookupDto) {
     return this.prisma.dispatch.findMany({
       where: {
-        organizationId,
         status: 'COMPLETED',
         channelId: query.channelId,
         OR: [
@@ -117,18 +115,16 @@ export class DispatchesService {
   }
 
   async create(user: AuthUser, dto: CreateDispatchDto) {
-    const organizationId = user.organizationId;
     const orderNumber = clean(dto.orderNumber);
 
     const id = await this.prisma.$transaction(async (tx) => {
-      const channel = await tx.salesChannel.findFirst({ where: { id: dto.channelId, organizationId } });
+      const channel = await tx.salesChannel.findUnique({ where: { id: dto.channelId } });
       if (!channel) throw new NotFoundException('Sales channel not found');
       if (!channel.isActive) throw new BadRequestException(`${channel.name} is turned off in settings`);
 
       if (orderNumber) {
         const existing = await tx.dispatch.findFirst({
           where: {
-            organizationId,
             channelId: dto.channelId,
             status: 'COMPLETED',
             orderNumber: { equals: orderNumber, mode: 'insensitive' },
@@ -142,15 +138,13 @@ export class DispatchesService {
 
       await this.stock.loadVariants(
         tx,
-        organizationId,
         dto.items.map((i) => i.variantId),
       );
-      const warehouseId = await this.warehouses.resolve(tx, organizationId, dto.warehouseId);
-      const number = await this.numbers.next(tx, organizationId, 'DISPATCH');
+      const warehouseId = await this.warehouses.resolve(tx, dto.warehouseId);
+      const number = await this.numbers.next(tx, 'DISPATCH');
 
       const dispatch = await tx.dispatch.create({
         data: {
-          organizationId,
           number,
           channelId: dto.channelId,
           warehouseId,
@@ -166,20 +160,20 @@ export class DispatchesService {
 
       await this.stock.apply(
         tx,
-        { organizationId, warehouseId, userId: user.userId, dispatchId: dispatch.id },
+        { warehouseId, userId: user.userId, dispatchId: dispatch.id },
         dto.items.map((i) => ({ variantId: i.variantId, quantity: -i.quantity, type: 'DISPATCH' as const })),
       );
       return dispatch.id;
     }, TX_OPTIONS);
 
-    return this.get(organizationId, id);
+    return this.get(id);
   }
 
   /** Cancelling puts the packed units back into stock. */
   async cancel(user: AuthUser, id: string, reason: string) {
     await this.prisma.$transaction(async (tx) => {
-      const dispatch = await tx.dispatch.findFirst({
-        where: { id, organizationId: user.organizationId },
+      const dispatch = await tx.dispatch.findUnique({
+        where: { id },
         include: { items: true, salesReturns: { where: { status: 'COMPLETED' }, select: { number: true } } },
       });
       if (!dispatch) throw new NotFoundException('Packing entry not found');
@@ -198,7 +192,7 @@ export class DispatchesService {
 
       await this.stock.apply(
         tx,
-        { organizationId: user.organizationId, warehouseId: dispatch.warehouseId, userId: user.userId, dispatchId: id },
+        { warehouseId: dispatch.warehouseId, userId: user.userId, dispatchId: id },
         dispatch.items.map((i) => ({
           variantId: i.variantId,
           quantity: i.quantity,
@@ -207,6 +201,6 @@ export class DispatchesService {
         })),
       );
     }, TX_OPTIONS);
-    return this.get(user.organizationId, id);
+    return this.get(id);
   }
 }

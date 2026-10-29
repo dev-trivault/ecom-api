@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../../common/auth/auth-user.js';
-import { CurrentUser, Roles } from '../../common/auth/decorators.js';
+import { CurrentUser } from '../../common/auth/decorators.js';
 import { CancelDocumentDto } from '../../common/dto/cancel-document.dto.js';
 import { CreateDispatchDto, DispatchLookupDto, DispatchQueryDto } from './dispatches.dto.js';
 import { DispatchesService } from './dispatches.service.js';
@@ -13,19 +13,19 @@ export class DispatchesController {
   constructor(private readonly dispatches: DispatchesService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query() query: DispatchQueryDto) {
-    return this.dispatches.list(user.organizationId, query);
+  list(@Query() query: DispatchQueryDto) {
+    return this.dispatches.list(query);
   }
 
   @Get('lookup')
   @ApiOperation({ summary: 'Find packed orders by order ID or tracking number' })
-  lookup(@CurrentUser() user: AuthUser, @Query() query: DispatchLookupDto) {
-    return this.dispatches.lookup(user.organizationId, query);
+  lookup(@Query() query: DispatchLookupDto) {
+    return this.dispatches.lookup(query);
   }
 
   @Get(':id')
-  get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
-    return this.dispatches.get(user.organizationId, id);
+  get(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dispatches.get(id);
   }
 
   @Post()
@@ -36,7 +36,6 @@ export class DispatchesController {
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
-  @Roles('OWNER', 'ADMIN', 'MANAGER')
   @ApiOperation({ summary: 'Cancel a packing entry (e.g. order cancelled before pickup). Puts units back.' })
   cancel(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelDocumentDto) {
     return this.dispatches.cancel(user, id, dto.reason);

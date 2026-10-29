@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Req, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -8,7 +8,7 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { ACCESS_COOKIE, REFRESH_COOKIE } from '../../common/auth/cookies.js';
 import { CurrentUser, Public } from '../../common/auth/decorators.js';
 import { AuthService, ClientMeta, IssuedTokens } from './auth.service.js';
-import { ChangePasswordDto, LoginDto, RefreshDto, RegisterDto } from './dto/auth.dto.js';
+import { ChangePasswordDto, ForgotPasswordDto, LoginDto, RefreshDto, ResetPasswordDto } from './dto/auth.dto.js';
 
 const AUTH_THROTTLE = { default: { limit: 10, ttl: 60_000 } };
 
@@ -24,23 +24,14 @@ export class AuthController {
   @Get('config')
   @ApiOperation({ summary: 'Public auth settings used by the login page' })
   getConfig() {
-    return { allowRegistration: this.config.get('ALLOW_REGISTRATION', { infer: true }) };
-  }
-
-  @Public()
-  @Throttle(AUTH_THROTTLE)
-  @Post('register')
-  @ApiOperation({ summary: 'Create a new business with its owner account' })
-  async register(@Body() dto: RegisterDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const { tokens, authUser } = await this.auth.register(dto, clientMeta(req));
-    return this.respondWithSession(res, tokens, authUser);
+    return this.auth.publicConfig();
   }
 
   @Public()
   @Throttle(AUTH_THROTTLE)
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Log in with email and password' })
+  @ApiOperation({ summary: 'Log in with email and password (refused when MAX_LOGIN_DEVICES are already logged in)' })
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const { tokens, authUser } = await this.auth.login(dto, clientMeta(req));
     return this.respondWithSession(res, tokens, authUser);
@@ -79,7 +70,7 @@ export class AuthController {
 
   @ApiBearerAuth()
   @Get('me')
-  @ApiOperation({ summary: 'Current user, role and business' })
+  @ApiOperation({ summary: 'Current user and business' })
   me(@CurrentUser() user: AuthUser) {
     return this.auth.me(user);
   }
@@ -90,6 +81,40 @@ export class AuthController {
   @ApiOperation({ summary: 'Change your password (logs out your other devices)' })
   async changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto) {
     await this.auth.changePassword(user, dto);
+  }
+
+  @ApiBearerAuth()
+  @Get('devices')
+  @ApiOperation({ summary: 'Devices where you are logged in' })
+  listDevices(@CurrentUser() user: AuthUser) {
+    return this.auth.listDevices(user);
+  }
+
+  @ApiBearerAuth()
+  @Post('devices/:id/logout')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Log out another device, freeing its place' })
+  async logoutDevice(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    await this.auth.logoutDevice(user, id);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Email a link to choose a new password. Same reply whether or not the email is the login.' })
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request) {
+    await this.auth.forgotPassword(dto, clientMeta(req));
+  }
+
+  @Public()
+  @Throttle(AUTH_THROTTLE)
+  @Post('reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Set a new password with the token from the email link. Logs out every device.' })
+  async resetPassword(@Body() dto: ResetPasswordDto, @Res({ passthrough: true }) res: Response) {
+    await this.auth.resetPassword(dto);
+    this.clearCookies(res);
   }
 
   private async respondWithSession(res: Response, tokens: IssuedTokens, authUser: AuthUser) {
